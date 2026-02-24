@@ -22,6 +22,10 @@ export const metadata: Metadata = {
   title: "Solo Draw",
   description:
     "Single-user Excalidraw-style workspace with local projects, autosave, and polished light/dark themes.",
+  icons: {
+    icon: "/icon.svg",
+    shortcut: "/icon.svg",
+  },
 };
 
 export default function RootLayout({
