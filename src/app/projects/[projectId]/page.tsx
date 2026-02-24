@@ -7,7 +7,6 @@ import {
   Loader2,
   Maximize2,
   Minimize2,
-  Save,
 } from "lucide-react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
@@ -174,9 +173,9 @@ export default function ProjectEditorPage() {
   }, [nameDraft, project]);
 
   const persistScene = useCallback(
-    async (nextSceneJson: string) => {
+    async (nextSceneJson: string): Promise<"saved" | "error" | "conflict"> => {
       if (!projectId || !project) {
-        return;
+        return "error";
       }
 
       setSaveStatus("saving");
@@ -186,13 +185,14 @@ export default function ProjectEditorPage() {
 
         if (!updated) {
           setSaveStatus("error");
-          return;
+          return "error";
         }
 
         setProject(updated);
         setSceneJsonDraft(updated.sceneJson);
         setConflictState(null);
         setSaveStatus("saved");
+        return "saved";
       } catch (error) {
         if (isProjectConflictError(error)) {
           const payload = getProjectConflictPayload(error);
@@ -202,10 +202,11 @@ export default function ProjectEditorPage() {
             localSceneJson: nextSceneJson,
           });
           setSaveStatus("conflict");
-          return;
+          return "conflict";
         }
 
         setSaveStatus("error");
+        return "error";
       }
     },
     [project, projectId],
@@ -257,18 +258,20 @@ export default function ProjectEditorPage() {
     files,
   ) => {
     const nextSceneJson = runtimeSerializer
-      ? runtimeSerializer(elements, appState, files, "local")
+      ? runtimeSerializer(elements, appState, files, "database")
       : serializeSceneSnapshot(elements, appState, files);
-    setSceneJsonDraft(nextSceneJson);
-    setSaveStatus("dirty");
-  };
+    setSceneJsonDraft((currentDraft) =>
+      currentDraft === nextSceneJson ? currentDraft : nextSceneJson,
+    );
 
-  const handleManualSave = async () => {
-    if (!sceneJsonDraft) {
+    if (project && nextSceneJson === project.sceneJson) {
+      setSaveStatus((currentStatus) =>
+        currentStatus === "saving" ? currentStatus : "saved",
+      );
       return;
     }
 
-    await persistScene(sceneJsonDraft);
+    setSaveStatus("dirty");
   };
 
   const handleLoadRemoteVersion = () => {
@@ -338,8 +341,8 @@ export default function ProjectEditorPage() {
         <header className="glass-panel flex flex-wrap items-center justify-between gap-2 px-3 py-2.5 md:px-4">
           <div className="flex min-w-0 flex-1 items-center gap-2">
             <Link href="/projects">
-              <Button variant="ghost" className="h-11 w-11 px-0">
-                <ArrowLeft className="h-5 w-5" />
+              <Button variant="ghost" className="h-10 w-10 p-0">
+                <ArrowLeft width={30} size={30} className="h-[32px] w-[32px] size-[32px] stroke-[2.4]" />
               </Button>
             </Link>
 
@@ -373,16 +376,6 @@ export default function ProjectEditorPage() {
               />
               {statusLabelMap[saveStatus]}
             </div>
-
-            <Button
-              variant="ghost"
-              className="h-10"
-              onClick={() => void handleManualSave()}
-              disabled={saveStatus === "saving"}
-            >
-              <Save className="mr-2 h-4 w-4" />
-              Save
-            </Button>
 
             <Button
               variant="ghost"
@@ -424,16 +417,6 @@ export default function ProjectEditorPage() {
             {statusLabelMap[saveStatus]}
           </div>
 
-          <Button
-            variant="ghost"
-            className="h-9"
-            onClick={() => void handleManualSave()}
-            disabled={saveStatus === "saving"}
-          >
-            <Save className="mr-2 h-4 w-4" />
-            Save
-          </Button>
-
           <ThemeToggle className="h-9 w-9" />
         </div>
       )}
@@ -458,6 +441,7 @@ export default function ProjectEditorPage() {
         <section className="fixed inset-0 z-50 overflow-hidden bg-[color:var(--canvas-shell)] p-3 md:p-4">
           <div className="h-full w-full">
             <ExcalidrawEditor
+              key={`${project.id}-fullscreen`}
               initialData={initialData}
               onChange={handleSceneChange}
               theme={canvasTheme}
@@ -469,6 +453,7 @@ export default function ProjectEditorPage() {
         <section className="glass-panel relative flex-1 overflow-hidden p-1.5">
           <div className="h-[calc(100vh-128px)] overflow-hidden rounded-xl border border-[color:var(--border)] bg-[color:var(--canvas-shell)]">
             <ExcalidrawEditor
+              key={`${project.id}-default`}
               initialData={initialData}
               onChange={handleSceneChange}
               theme={canvasTheme}

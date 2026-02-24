@@ -1,9 +1,9 @@
 "use client";
 
-import { FolderOpen, LogOut, Plus, Sparkles } from "lucide-react";
+import { ClipboardPaste, FileUp, FolderOpen, LogOut, Plus, Sparkles } from "lucide-react";
 import { signOut } from "next-auth/react";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { type ChangeEvent, useEffect, useMemo, useState } from "react";
 
 import { Button } from "@/components/button";
 import { ProjectCard } from "@/components/project-card";
@@ -14,7 +14,9 @@ import {
   getApiErrorMessage,
   loadProjects,
   renameProject,
+  saveProjectScene,
 } from "@/lib/projects-api";
+import { parseImportedSceneJson, stringifyScene } from "@/lib/scene";
 import { createDefaultProjectName, type ProjectRecord } from "@/types/project";
 
 export default function ProjectsPage() {
@@ -25,6 +27,11 @@ export default function ProjectsPage() {
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [newProjectName, setNewProjectName] = useState(createDefaultProjectName());
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const [importProjectName, setImportProjectName] = useState(createDefaultProjectName());
+  const [importText, setImportText] = useState("");
+  const [importError, setImportError] = useState<string | null>(null);
+  const [isImporting, setIsImporting] = useState(false);
 
   const [renameTarget, setRenameTarget] = useState<ProjectRecord | null>(null);
   const [renameValue, setRenameValue] = useState("");
@@ -70,6 +77,104 @@ export default function ProjectsPage() {
       setError(getApiErrorMessage(error));
     } finally {
       setIsCreating(false);
+    }
+  };
+
+  const handleOpenImportModal = () => {
+    setImportProjectName(createDefaultProjectName());
+    setImportText("");
+    setImportError(null);
+    setIsImportModalOpen(true);
+  };
+
+  const resolveImportError = (error: unknown): string => {
+    if (error instanceof Error) {
+      const trimmed = error.message.trim();
+
+      if (
+        trimmed === "This is not valid JSON." ||
+        trimmed === "Invalid Excalidraw file. Missing elements array."
+      ) {
+        return trimmed;
+      }
+    }
+
+    return getApiErrorMessage(error);
+  };
+
+  const importIntoNewProject = async (rawSceneJson: string) => {
+    if (isImporting) {
+      return;
+    }
+
+    setIsImporting(true);
+    setImportError(null);
+
+    let createdProject: ProjectRecord | null = null;
+
+    try {
+      const importedScene = parseImportedSceneJson(rawSceneJson);
+      const sceneJson = stringifyScene(importedScene);
+      const projectName = importProjectName.trim() || createDefaultProjectName();
+
+      createdProject = await createProject(projectName);
+      await saveProjectScene(createdProject.id, sceneJson, createdProject.version);
+
+      setIsImportModalOpen(false);
+      setImportText("");
+      setImportProjectName(createDefaultProjectName());
+      router.push(`/projects/${createdProject.id}`);
+    } catch (error) {
+      if (createdProject) {
+        setImportError(
+          "Project was created, but import sync failed. Open it from the list and save once to retry.",
+        );
+        await refreshProjects();
+      } else {
+        setImportError(resolveImportError(error));
+      }
+    } finally {
+      setIsImporting(false);
+    }
+  };
+
+  const handleImportFromTextarea = async () => {
+    const trimmed = importText.trim();
+
+    if (!trimmed) {
+      setImportError("Paste Excalidraw JSON before importing.");
+      return;
+    }
+
+    await importIntoNewProject(trimmed);
+  };
+
+  const handleImportFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+
+    if (!file) {
+      return;
+    }
+
+    const text = await file.text();
+    setImportText(text);
+    await importIntoNewProject(text);
+  };
+
+  const handlePasteFromClipboard = async () => {
+    try {
+      const clipboardText = await navigator.clipboard.readText();
+
+      if (!clipboardText.trim()) {
+        setImportError("Clipboard is empty.");
+        return;
+      }
+
+      setImportText(clipboardText);
+      setImportError(null);
+    } catch {
+      setImportError("Clipboard access was blocked. Paste manually in the textbox.");
     }
   };
 
@@ -136,7 +241,7 @@ export default function ProjectsPage() {
             </div>
           </div>
 
-          <div className="mt-6 grid gap-3 rounded-2xl border border-[color:var(--border)] bg-[color:var(--card)] p-3 md:grid-cols-[1fr_auto] md:p-4">
+          <div className="mt-6 grid gap-3 rounded-2xl border border-[color:var(--border)] bg-[color:var(--card)] p-3 md:grid-cols-[1fr_auto_auto] md:p-4">
             <input
               value={newProjectName}
               onChange={(event) => setNewProjectName(event.target.value)}
@@ -151,6 +256,14 @@ export default function ProjectsPage() {
             >
               <Plus className="mr-2 h-4 w-4" />
               {isCreating ? "Creating..." : "Create Project"}
+            </Button>
+            <Button
+              variant="ghost"
+              className="h-11 w-full px-5 md:w-auto"
+              onClick={handleOpenImportModal}
+            >
+              <FileUp className="mr-2 h-4 w-4" />
+              Import File
             </Button>
           </div>
         </header>
@@ -244,6 +357,80 @@ export default function ProjectsPage() {
               </Button>
               <Button variant="danger" onClick={handleDelete}>
                 Delete
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {isImportModalOpen ? (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/35 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-2xl rounded-2xl border border-[color:var(--border)] bg-[color:var(--card)] p-5 shadow-[0_24px_55px_-32px_rgba(0,0,0,0.75)]">
+            <h3 className="text-lg font-semibold text-[color:var(--foreground)]">
+              Import Excalidraw as New Project
+            </h3>
+            <p className="mt-2 text-sm text-[color:var(--muted-foreground)]">
+              Paste Excalidraw JSON or upload a <code>.excalidraw</code> file.
+            </p>
+
+            {importError ? (
+              <div className="mt-4 rounded-xl border border-[color:var(--danger-soft)] bg-[color:var(--danger-bg)] px-4 py-3 text-sm text-[color:var(--danger)]">
+                {importError}
+              </div>
+            ) : null}
+
+            <input
+              value={importProjectName}
+              onChange={(event) => setImportProjectName(event.target.value)}
+              placeholder="New project name"
+              maxLength={80}
+              className="mt-4 h-11 w-full rounded-xl border border-[color:var(--border)] bg-[color:var(--card-muted)] px-4 text-sm font-medium text-[color:var(--foreground)] outline-none focus:border-[color:var(--accent)]"
+            />
+
+            <textarea
+              value={importText}
+              onChange={(event) => setImportText(event.target.value)}
+              placeholder="Paste Excalidraw JSON here..."
+              className="mt-3 min-h-56 w-full rounded-xl border border-[color:var(--border)] bg-[color:var(--card-muted)] px-3 py-2 text-sm text-[color:var(--foreground)] outline-none focus:border-[color:var(--accent)]"
+            />
+
+            <div className="mt-3 flex flex-wrap gap-2">
+              <label className="inline-flex h-10 cursor-pointer items-center justify-center rounded-xl border border-[color:var(--border)] bg-[color:var(--card)] px-4 text-sm font-semibold tracking-tight text-[color:var(--foreground)] transition-colors hover:bg-[color:var(--card-muted)]">
+                <FileUp className="mr-2 h-4 w-4" />
+                Choose .excalidraw
+                <input
+                  type="file"
+                  accept=".excalidraw,.json,application/json"
+                  className="hidden"
+                  onChange={(event) => void handleImportFileChange(event)}
+                />
+              </label>
+
+              <Button variant="ghost" className="h-10" onClick={() => void handlePasteFromClipboard()}>
+                <ClipboardPaste className="mr-2 h-4 w-4" />
+                Paste Clipboard
+              </Button>
+            </div>
+
+            <div className="mt-5 flex justify-end gap-2">
+              <Button
+                variant="ghost"
+                onClick={() => {
+                  if (isImporting) {
+                    return;
+                  }
+
+                  setIsImportModalOpen(false);
+                  setImportError(null);
+                }}
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={() => void handleImportFromTextarea()}
+                disabled={isImporting || !importText.trim()}
+              >
+                {isImporting ? "Importing..." : "Create from Import"}
               </Button>
             </div>
           </div>
